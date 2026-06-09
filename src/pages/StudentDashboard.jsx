@@ -10,6 +10,7 @@ export default function StudentDashboard() {
   const [enrolledCourses, setEnrolledCourses] = useState([])
   const [selectedCourse, setSelectedCourse] = useState(null)
   const [modules, setModules] = useState([])
+  const [collapsedModules, setCollapsedModules] = useState({})
   const [selectedLesson, setSelectedLesson] = useState(null)
   const [selectedQuiz, setSelectedQuiz] = useState(null)
   const [questions, setQuestions] = useState([])
@@ -68,11 +69,16 @@ export default function StudentDashboard() {
   async function openCourse(course) {
     setSelectedCourse(course)
     setView('course')
+    setCollapsedModules({})
     const { data } = await supabase.from('modules')
       .select('*, lessons(*), quizzes(*)')
       .eq('course_id', course.id)
       .order('order_index')
     setModules(data || [])
+  }
+
+  function toggleModule(moduleId) {
+    setCollapsedModules(prev => ({ ...prev, [moduleId]: !prev[moduleId] }))
   }
 
   async function openQuiz(quiz) {
@@ -115,10 +121,9 @@ export default function StudentDashboard() {
 
   const isEnrolled = id => enrolledCourses.some(c => c?.id === id)
 
-  const getProgress = (mod) => {
-    if (!mod.lessons?.length) return null
-    const done = mod.lessons.filter(l => completedLessons.includes(l.id)).length
-    return { done, total: mod.lessons.length }
+  function formatDate(dateStr) {
+    if (!dateStr) return null
+    return new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   }
 
   return (
@@ -180,7 +185,6 @@ export default function StudentDashboard() {
                   <div className="empty-state">
                     <div className="icon">🎓</div>
                     <h3>No courses yet</h3>
-                    <p>Browse available courses and enroll to get started</p>
                     <button className="btn-primary" style={{ marginTop: 16 }} onClick={() => setTab('browse')}>Browse Courses</button>
                   </div>
                 )}
@@ -212,7 +216,6 @@ export default function StudentDashboard() {
                   <div className="empty-state">
                     <div className="icon">📭</div>
                     <h3>No courses available yet</h3>
-                    <p>Check back later</p>
                   </div>
                 )}
               </div>
@@ -230,56 +233,73 @@ export default function StudentDashboard() {
                 <h2>{selectedCourse.title}</h2>
                 <p>{selectedCourse.description}</p>
               </div>
-              <div className="item-list">
-                {modules.map((mod, i) => {
-                  const progress = getProgress(mod)
-                  const attempt = mod.quizzes?.[0] ? quizAttempts[mod.quizzes[0].id] : null
-                  return (
-                    <div key={mod.id} className="card" style={{ marginBottom: 0 }}>
-                      <div className="card-header">
-                        <div>
-                          <div className="card-title">Module {i + 1}: {mod.title}</div>
-                          <div className="card-subtitle">{mod.description}</div>
-                        </div>
-                      </div>
-                      {progress && (
-                        <div style={{ marginBottom: 16 }}>
-                          <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>{progress.done}/{progress.total} lessons completed</div>
-                          <div className="progress-bar">
-                            <div className="progress-fill" style={{ width: `${(progress.done / progress.total) * 100}%` }} />
-                          </div>
-                        </div>
-                      )}
-                      {mod.lessons?.map((lesson, j) => (
-                        <div key={lesson.id} className="item-row" style={{ marginBottom: 8 }}
-                          onClick={() => { setSelectedLesson(lesson); setView('lesson') }}>
-                          <div className="item-row-info">
-                            <h4 style={{ fontSize: 14 }}>
-                              {completedLessons.includes(lesson.id) ? '✅ ' : '📄 '}
-                              Lesson {j + 1}: {lesson.title}
-                            </h4>
-                          </div>
-                          <button className="btn-secondary btn-sm">Read →</button>
-                        </div>
-                      ))}
-                      {mod.quizzes?.[0] && (
-                        <div className="item-row" style={{ marginTop: 8, borderColor: attempt ? 'var(--success)' : 'var(--accent)', background: attempt ? '#f0fff4' : '#fffbeb' }}
-                          onClick={() => openQuiz(mod.quizzes[0])}>
-                          <div className="item-row-info">
-                            <h4 style={{ fontSize: 14 }}>
-                              {attempt ? `✅ Quiz: ${mod.quizzes[0].title} — ${attempt.score}/${attempt.total}` : `📝 Quiz: ${mod.quizzes[0].title}`}
-                            </h4>
-                          </div>
-                          <button className="btn-secondary btn-sm">{attempt ? 'Review' : 'Take Quiz'} →</button>
-                        </div>
-                      )}
-                      {!mod.lessons?.length && !mod.quizzes?.length && (
-                        <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>No content yet</p>
+
+              {modules.map((mod, i) => {
+                const lessons = mod.lessons || []
+                const quizItem = mod.quizzes?.[0]
+                const doneLessons = lessons.filter(l => completedLessons.includes(l.id)).length
+                const attempt = quizItem ? quizAttempts[quizItem.id] : null
+
+                return (
+                  <div key={mod.id} className="module-section">
+                    <div className="module-header" onClick={() => toggleModule(mod.id)}>
+                      <span className="module-toggle">{collapsedModules[mod.id] ? '▶' : '▼'}</span>
+                      <span className="module-header-title">Module {i + 1}: {mod.title}</span>
+                      {lessons.length > 0 && (
+                        <span style={{ fontSize: 12, opacity: 0.75, marginLeft: 'auto', marginRight: 8 }}>
+                          {doneLessons}/{lessons.length} completed
+                        </span>
                       )}
                     </div>
-                  )
-                })}
-              </div>
+
+                    {!collapsedModules[mod.id] && (
+                      <div className="module-items">
+                        {lessons.map((lesson, j) => (
+                          <div key={lesson.id} className="module-item"
+                            onClick={() => { setSelectedLesson(lesson); setView('lesson') }}>
+                            <span className="item-icon">{completedLessons.includes(lesson.id) ? '✅' : '📄'}</span>
+                            <div className="item-info">
+                              <span className="item-title">Lesson {j + 1}: {lesson.title}</span>
+                              <span className="item-meta">
+                                {lesson.due_date && `Due ${formatDate(lesson.due_date)}`}
+                                {lesson.due_date && lesson.points > 0 && ' · '}
+                                {lesson.points > 0 && `${lesson.points} pts`}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+
+                        {quizItem && (
+                          <div className="module-item" onClick={() => openQuiz(quizItem)}>
+                            <span className="item-icon">{attempt ? '✅' : '📝'}</span>
+                            <div className="item-info">
+                              <span className="item-title">{quizItem.title}</span>
+                              <span className="item-meta">
+                                {quizItem.due_date && `Due ${formatDate(quizItem.due_date)}`}
+                                {quizItem.due_date && quizItem.points > 0 && ' · '}
+                                {quizItem.points > 0 && `${quizItem.points} pts`}
+                                {attempt && ` · Score: ${attempt.score}/${attempt.total}`}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        {lessons.length === 0 && !quizItem && (
+                          <div style={{ padding: '16px 20px', color: 'var(--text-muted)', fontSize: 13 }}>No content yet</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+
+              {modules.length === 0 && (
+                <div className="empty-state">
+                  <div className="icon">📂</div>
+                  <h3>No modules yet</h3>
+                  <p>Check back later</p>
+                </div>
+              )}
             </>
           )}
 
@@ -293,7 +313,16 @@ export default function StudentDashboard() {
                 <span>{selectedLesson.title}</span>
               </div>
               <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <h2>{selectedLesson.title}</h2>
+                <div>
+                  <h2>{selectedLesson.title}</h2>
+                  {(selectedLesson.points > 0 || selectedLesson.due_date) && (
+                    <p>
+                      {selectedLesson.points > 0 && `${selectedLesson.points} pts`}
+                      {selectedLesson.points > 0 && selectedLesson.due_date && ' · '}
+                      {selectedLesson.due_date && `Due ${formatDate(selectedLesson.due_date)}`}
+                    </p>
+                  )}
+                </div>
                 {completedLessons.includes(selectedLesson.id)
                   ? <span className="badge badge-enrolled" style={{ padding: '8px 16px', fontSize: 14 }}>Completed ✓</span>
                   : <button className="btn-primary" onClick={() => markComplete(selectedLesson.id)}>Mark as Complete ✓</button>}
@@ -321,7 +350,11 @@ export default function StudentDashboard() {
               </div>
               <div className="page-header">
                 <h2>{selectedQuiz.title}</h2>
-                <p>{questions.length} questions</p>
+                <p>
+                  {questions.length} questions
+                  {selectedQuiz.points > 0 && ` · ${selectedQuiz.points} pts`}
+                  {selectedQuiz.due_date && ` · Due ${formatDate(selectedQuiz.due_date)}`}
+                </p>
               </div>
               {submitted && score && (
                 <div className="card score-card" style={{ marginBottom: 24 }}>

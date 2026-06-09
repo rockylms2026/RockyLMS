@@ -7,14 +7,17 @@ export default function InstructorDashboard() {
   const [view, setView] = useState('courses')
   const [selectedCourse, setSelectedCourse] = useState(null)
   const [selectedModule, setSelectedModule] = useState(null)
+  const [selectedQuiz, setSelectedQuiz] = useState(null)
   const [courses, setCourses] = useState([])
   const [modules, setModules] = useState([])
-  const [lessons, setLessons] = useState([])
-  const [quiz, setQuiz] = useState(null)
-  const [questions, setQuestions] = useState([])
+  const [moduleLessons, setModuleLessons] = useState({})
+  const [moduleQuizzes, setModuleQuizzes] = useState({})
+  const [moduleQuestions, setModuleQuestions] = useState({})
+  const [collapsedModules, setCollapsedModules] = useState({})
   const [showCourseForm, setShowCourseForm] = useState(false)
   const [showModuleForm, setShowModuleForm] = useState(false)
-  const [showLessonForm, setShowLessonForm] = useState(false)
+  const [activeLessonForm, setActiveLessonForm] = useState(null)
+  const [activeQuizForm, setActiveQuizForm] = useState(null)
   const [showQForm, setShowQForm] = useState(false)
   const [editingLesson, setEditingLesson] = useState(null)
   const [courseTitle, setCourseTitle] = useState('')
@@ -23,7 +26,11 @@ export default function InstructorDashboard() {
   const [moduleDesc, setModuleDesc] = useState('')
   const [lessonTitle, setLessonTitle] = useState('')
   const [lessonContent, setLessonContent] = useState('')
+  const [lessonDueDate, setLessonDueDate] = useState('')
+  const [lessonPoints, setLessonPoints] = useState('')
   const [quizTitle, setQuizTitle] = useState('')
+  const [quizDueDate, setQuizDueDate] = useState('')
+  const [quizPoints, setQuizPoints] = useState('')
   const [qText, setQText] = useState('')
   const [qOptions, setQOptions] = useState(['', '', '', ''])
   const [qCorrect, setQCorrect] = useState(0)
@@ -39,38 +46,45 @@ export default function InstructorDashboard() {
     setCourses(data || [])
   }
 
-  async function fetchModules(courseId) {
-    const { data } = await supabase.from('modules').select('*')
+  async function openCourse(course) {
+    setSelectedCourse(course)
+    setView('course')
+    await fetchCourseData(course.id)
+  }
+
+  async function fetchCourseData(courseId) {
+    const { data: mods } = await supabase.from('modules').select('*')
       .eq('course_id', courseId).order('order_index')
-    setModules(data || [])
+    setModules(mods || [])
+    const lessonsMap = {}, quizzesMap = {}, questionsMap = {}
+    for (const mod of (mods || [])) {
+      const { data: lessons } = await supabase.from('lessons').select('*')
+        .eq('module_id', mod.id).order('order_index')
+      lessonsMap[mod.id] = lessons || []
+      const { data: quiz } = await supabase.from('quizzes').select('*')
+        .eq('module_id', mod.id).maybeSingle()
+      if (quiz) {
+        quizzesMap[mod.id] = quiz
+        const { data: questions } = await supabase.from('quiz_questions').select('*')
+          .eq('quiz_id', quiz.id).order('order_index')
+        questionsMap[quiz.id] = questions || []
+      }
+    }
+    setModuleLessons(lessonsMap)
+    setModuleQuizzes(quizzesMap)
+    setModuleQuestions(questionsMap)
   }
 
-  async function fetchLessons(moduleId) {
-    const { data } = await supabase.from('lessons').select('*')
-      .eq('module_id', moduleId).order('order_index')
-    setLessons(data || [])
+  function toggleModule(moduleId) {
+    setCollapsedModules(prev => ({ ...prev, [moduleId]: !prev[moduleId] }))
   }
 
-  async function fetchQuiz(moduleId) {
-    const { data } = await supabase.from('quizzes').select('*')
-      .eq('module_id', moduleId).maybeSingle()
-    setQuiz(data || null)
-    if (data) {
-      const { data: qs } = await supabase.from('quiz_questions').select('*')
-        .eq('quiz_id', data.id).order('order_index')
-      setQuestions(qs || [])
-    } else { setQuestions([]) }
+  function formatDate(dateStr) {
+    if (!dateStr) return null
+    return new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   }
 
-  function openCourse(course) {
-    setSelectedCourse(course); setSelectedModule(null)
-    setView('course'); fetchModules(course.id)
-  }
-
-  function openModule(mod) {
-    setSelectedModule(mod); setView('module')
-    fetchLessons(mod.id); fetchQuiz(mod.id)
-  }
+  function flash(message) { setMsg(message); setTimeout(() => setMsg(''), 3000) }
 
   async function createCourse(e) {
     e.preventDefault(); setLoading(true)
@@ -79,14 +93,13 @@ export default function InstructorDashboard() {
       .select().single()
     if (!error) {
       setCourses([data, ...courses]); setCourseTitle(''); setCourseDesc('')
-      setShowCourseForm(false); setMsg('Course created!')
-      setTimeout(() => setMsg(''), 3000)
+      setShowCourseForm(false); flash('Course created!')
     }
     setLoading(false)
   }
 
   async function deleteCourse(id) {
-    if (!confirm('Delete this course and all its content?')) return
+    if (!confirm('Delete this course?')) return
     await supabase.from('courses').delete().eq('id', id)
     setCourses(courses.filter(c => c.id !== id))
     if (selectedCourse?.id === id) { setView('courses'); setSelectedCourse(null) }
@@ -97,67 +110,112 @@ export default function InstructorDashboard() {
     const { data } = await supabase.from('modules')
       .insert({ course_id: selectedCourse.id, title: moduleTitle, description: moduleDesc, order_index: modules.length })
       .select().single()
-    setModules([...modules, data]); setModuleTitle(''); setModuleDesc('')
+    setModules([...modules, data])
+    setModuleLessons(prev => ({ ...prev, [data.id]: [] }))
+    setModuleTitle(''); setModuleDesc('')
     setShowModuleForm(false); setLoading(false)
   }
 
   async function deleteModule(id) {
-    if (!confirm('Delete this module and all its content?')) return
+    if (!confirm('Delete this module?')) return
     await supabase.from('modules').delete().eq('id', id)
     setModules(modules.filter(m => m.id !== id))
+    const newL = { ...moduleLessons }; delete newL[id]
+    const newQ = { ...moduleQuizzes }; delete newQ[id]
+    setModuleLessons(newL); setModuleQuizzes(newQ)
   }
 
-  async function saveLesson(e) {
+  async function saveLesson(e, moduleId) {
     e.preventDefault(); setLoading(true)
+    const payload = { title: lessonTitle, content: lessonContent, due_date: lessonDueDate || null, points: lessonPoints ? parseInt(lessonPoints) : 0 }
     if (editingLesson) {
-      const { data } = await supabase.from('lessons')
-        .update({ title: lessonTitle, content: lessonContent })
-        .eq('id', editingLesson.id).select().single()
-      setLessons(lessons.map(l => l.id === editingLesson.id ? data : l))
+      const { data } = await supabase.from('lessons').update(payload).eq('id', editingLesson.id).select().single()
+      setModuleLessons(prev => ({ ...prev, [moduleId]: prev[moduleId].map(l => l.id === editingLesson.id ? data : l) }))
+      setEditingLesson(null)
     } else {
       const { data } = await supabase.from('lessons')
-        .insert({ module_id: selectedModule.id, title: lessonTitle, content: lessonContent, order_index: lessons.length })
+        .insert({ ...payload, module_id: moduleId, order_index: (moduleLessons[moduleId] || []).length })
         .select().single()
-      setLessons([...lessons, data])
+      setModuleLessons(prev => ({ ...prev, [moduleId]: [...(prev[moduleId] || []), data] }))
     }
-    setLessonTitle(''); setLessonContent('')
-    setShowLessonForm(false); setEditingLesson(null); setLoading(false)
+    resetLessonForm(); setActiveLessonForm(null); setLoading(false)
   }
 
-  async function deleteLesson(id) {
+  async function deleteLesson(id, moduleId) {
     if (!confirm('Delete this lesson?')) return
     await supabase.from('lessons').delete().eq('id', id)
-    setLessons(lessons.filter(l => l.id !== id))
+    setModuleLessons(prev => ({ ...prev, [moduleId]: prev[moduleId].filter(l => l.id !== id) }))
   }
 
-  function startEditLesson(lesson) {
+  function startEditLesson(lesson, moduleId) {
     setEditingLesson(lesson); setLessonTitle(lesson.title)
-    setLessonContent(lesson.content); setShowLessonForm(true)
+    setLessonContent(lesson.content || ''); setLessonDueDate(lesson.due_date || '')
+    setLessonPoints(lesson.points || ''); setActiveLessonForm(moduleId)
   }
 
-  async function createQuiz(e) {
+  function resetLessonForm() {
+    setLessonTitle(''); setLessonContent(''); setLessonDueDate(''); setLessonPoints(''); setEditingLesson(null)
+  }
+
+  async function createQuiz(e, moduleId) {
     e.preventDefault(); setLoading(true)
     const { data } = await supabase.from('quizzes')
-      .insert({ module_id: selectedModule.id, title: quizTitle })
+      .insert({ module_id: moduleId, title: quizTitle, due_date: quizDueDate || null, points: quizPoints ? parseInt(quizPoints) : 0 })
       .select().single()
-    setQuiz(data); setQuizTitle(''); setLoading(false)
+    setModuleQuizzes(prev => ({ ...prev, [moduleId]: data }))
+    setModuleQuestions(prev => ({ ...prev, [data.id]: [] }))
+    setQuizTitle(''); setQuizDueDate(''); setQuizPoints('')
+    setActiveQuizForm(null); setLoading(false)
+  }
+
+  function openQuizEditor(quiz, mod) {
+    setSelectedQuiz(quiz); setSelectedModule(mod); setView('quizeditor')
   }
 
   async function addQuestion(e) {
     e.preventDefault(); setLoading(true)
     const { data } = await supabase.from('quiz_questions')
-      .insert({ quiz_id: quiz.id, question: qText, options: qOptions, correct_index: qCorrect, explanation: qExplanation, order_index: questions.length })
+      .insert({ quiz_id: selectedQuiz.id, question: qText, options: qOptions, correct_index: qCorrect, explanation: qExplanation, order_index: (moduleQuestions[selectedQuiz.id] || []).length })
       .select().single()
-    setQuestions([...questions, data])
+    setModuleQuestions(prev => ({ ...prev, [selectedQuiz.id]: [...(prev[selectedQuiz.id] || []), data] }))
     setQText(''); setQOptions(['', '', '', '']); setQCorrect(0); setQExplanation('')
     setShowQForm(false); setLoading(false)
   }
 
-  async function deleteQuestion(id) {
+  async function deleteQuestion(id, quizId) {
     if (!confirm('Delete this question?')) return
     await supabase.from('quiz_questions').delete().eq('id', id)
-    setQuestions(questions.filter(q => q.id !== id))
+    setModuleQuestions(prev => ({ ...prev, [quizId]: prev[quizId].filter(q => q.id !== id) }))
   }
+
+  const LessonForm = ({ moduleId, isEdit }) => (
+    <div style={{ padding: '16px 20px', background: '#f8f9ff', borderBottom: '1px solid var(--border)' }}>
+      <form onSubmit={e => saveLesson(e, moduleId)}>
+        <div className="form-group">
+          <label>Lesson Title</label>
+          <input type="text" value={lessonTitle} onChange={e => setLessonTitle(e.target.value)} placeholder="e.g. What is Psychology?" required />
+        </div>
+        <div className="form-group" style={{ marginTop: 10 }}>
+          <label>Content</label>
+          <textarea value={lessonContent} onChange={e => setLessonContent(e.target.value)} placeholder="Write lesson content..." style={{ minHeight: 120 }} />
+        </div>
+        <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+          <div className="form-group" style={{ flex: 1 }}>
+            <label>Due Date</label>
+            <input type="date" value={lessonDueDate} onChange={e => setLessonDueDate(e.target.value)} />
+          </div>
+          <div className="form-group" style={{ flex: 1 }}>
+            <label>Points</label>
+            <input type="number" value={lessonPoints} onChange={e => setLessonPoints(e.target.value)} placeholder="0" min="0" />
+          </div>
+        </div>
+        <div className="form-actions">
+          <button type="submit" className="btn-primary" disabled={loading}>{isEdit ? 'Save Changes' : 'Add Lesson'}</button>
+          <button type="button" className="btn-secondary" onClick={() => { setActiveLessonForm(null); resetLessonForm() }}>Cancel</button>
+        </div>
+      </form>
+    </div>
+  )
 
   return (
     <div className="dashboard">
@@ -180,9 +238,7 @@ export default function InstructorDashboard() {
           </div>
           <div className="sidebar-items">
             {courses.map(course => (
-              <div key={course.id}
-                className={`sidebar-item ${selectedCourse?.id === course.id ? 'active' : ''}`}
-                onClick={() => openCourse(course)}>
+              <div key={course.id} className={`sidebar-item ${selectedCourse?.id === course.id ? 'active' : ''}`} onClick={() => openCourse(course)}>
                 <span className="sidebar-item-title">{course.title}</span>
               </div>
             ))}
@@ -236,7 +292,6 @@ export default function InstructorDashboard() {
                 <div className="empty-state">
                   <div className="icon">📖</div>
                   <h3>No courses yet</h3>
-                  <p>Create your first course to get started</p>
                   <button className="btn-primary" style={{ marginTop: 16 }} onClick={() => setShowCourseForm(true)}>Create Course</button>
                 </div>
               )}
@@ -257,6 +312,7 @@ export default function InstructorDashboard() {
                 </div>
                 <button className="btn-accent" onClick={() => setShowModuleForm(true)}>+ Add Module</button>
               </div>
+
               {showModuleForm && (
                 <div className="form-panel">
                   <h3>Add Module</h3>
@@ -276,154 +332,176 @@ export default function InstructorDashboard() {
                   </form>
                 </div>
               )}
-              <div className="item-list">
-                {modules.map((mod, i) => (
-                  <div key={mod.id} className="item-row" onClick={() => openModule(mod)}>
-                    <div className="item-row-info">
-                      <h4>Module {i + 1}: {mod.title}</h4>
-                      <p>{mod.description || 'Click to add lessons and quiz'}</p>
-                    </div>
-                    <div className="item-row-actions" onClick={e => e.stopPropagation()}>
-                      <button className="btn-secondary btn-sm" onClick={() => openModule(mod)}>Open →</button>
-                      <button className="btn-danger" onClick={() => deleteModule(mod.id)}>Delete</button>
+
+              {modules.map((mod, i) => (
+                <div key={mod.id} className="module-section">
+                  <div className="module-header" onClick={() => toggleModule(mod.id)}>
+                    <span className="module-toggle">{collapsedModules[mod.id] ? '▶' : '▼'}</span>
+                    <span className="module-header-title">Module {i + 1}: {mod.title}</span>
+                    <div className="module-header-actions" onClick={e => e.stopPropagation()}>
+                      <button style={{ background: 'rgba(255,255,255,0.15)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: 6, cursor: 'pointer', padding: '4px 10px', fontSize: 12 }}
+                        onClick={() => deleteModule(mod.id)}>Delete</button>
                     </div>
                   </div>
-                ))}
-              </div>
+
+                  {!collapsedModules[mod.id] && (
+                    <div className="module-items">
+                      {(moduleLessons[mod.id] || []).map((lesson, j) => (
+                        activeLessonForm === mod.id && editingLesson?.id === lesson.id
+                          ? <LessonForm key={lesson.id} moduleId={mod.id} isEdit={true} />
+                          : (
+                            <div key={lesson.id} className="module-item">
+                              <span className="item-icon">📄</span>
+                              <div className="item-info">
+                                <span className="item-title">Lesson {j + 1}: {lesson.title}</span>
+                                <span className="item-meta">
+                                  {lesson.due_date && `Due ${formatDate(lesson.due_date)}`}
+                                  {lesson.due_date && lesson.points > 0 && ' · '}
+                                  {lesson.points > 0 && `${lesson.points} pts`}
+                                </span>
+                              </div>
+                              <div className="item-actions">
+                                <button className="btn-secondary btn-sm" onClick={() => startEditLesson(lesson, mod.id)}>Edit</button>
+                                <button className="btn-danger" onClick={() => deleteLesson(lesson.id, mod.id)}>Delete</button>
+                              </div>
+                            </div>
+                          )
+                      ))}
+
+                      {moduleQuizzes[mod.id] ? (
+                        <div className="module-item">
+                          <span className="item-icon">📝</span>
+                          <div className="item-info">
+                            <span className="item-title">{moduleQuizzes[mod.id].title}</span>
+                            <span className="item-meta">
+                              {moduleQuizzes[mod.id].due_date && `Due ${formatDate(moduleQuizzes[mod.id].due_date)}`}
+                              {moduleQuizzes[mod.id].due_date && moduleQuizzes[mod.id].points > 0 && ' · '}
+                              {moduleQuizzes[mod.id].points > 0 && `${moduleQuizzes[mod.id].points} pts · `}
+                              {(moduleQuestions[moduleQuizzes[mod.id].id] || []).length} questions
+                            </span>
+                          </div>
+                          <div className="item-actions">
+                            <button className="btn-secondary btn-sm" onClick={() => openQuizEditor(moduleQuizzes[mod.id], mod)}>Manage Questions</button>
+                          </div>
+                        </div>
+                      ) : activeQuizForm === mod.id ? (
+                        <div style={{ padding: '16px 20px', background: '#f8f9ff', borderBottom: '1px solid var(--border)' }}>
+                          <form onSubmit={e => createQuiz(e, mod.id)}>
+                            <div className="form-group">
+                              <label>Quiz Title</label>
+                              <input type="text" value={quizTitle} onChange={e => setQuizTitle(e.target.value)} placeholder="e.g. Module 1 Quiz" required />
+                            </div>
+                            <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+                              <div className="form-group" style={{ flex: 1 }}>
+                                <label>Due Date</label>
+                                <input type="date" value={quizDueDate} onChange={e => setQuizDueDate(e.target.value)} />
+                              </div>
+                              <div className="form-group" style={{ flex: 1 }}>
+                                <label>Points</label>
+                                <input type="number" value={quizPoints} onChange={e => setQuizPoints(e.target.value)} placeholder="0" min="0" />
+                              </div>
+                            </div>
+                            <div className="form-actions">
+                              <button type="submit" className="btn-primary" disabled={loading}>Create Quiz</button>
+                              <button type="button" className="btn-secondary" onClick={() => setActiveQuizForm(null)}>Cancel</button>
+                            </div>
+                          </form>
+                        </div>
+                      ) : null}
+
+                      {activeLessonForm === mod.id && !editingLesson
+                        ? <LessonForm moduleId={mod.id} isEdit={false} />
+                        : (
+                          <div style={{ display: 'flex' }}>
+                            <div className="add-item" style={{ flex: 1 }} onClick={() => { setActiveLessonForm(mod.id); resetLessonForm() }}>+ Add Lesson</div>
+                            {!moduleQuizzes[mod.id] && (
+                              <div className="add-item" style={{ flex: 1, borderLeft: '1px solid var(--border)' }} onClick={() => { setActiveQuizForm(mod.id); setQuizTitle('') }}>+ Add Quiz</div>
+                            )}
+                          </div>
+                        )
+                      }
+                    </div>
+                  )}
+                </div>
+              ))}
+
               {modules.length === 0 && !showModuleForm && (
                 <div className="empty-state">
                   <div className="icon">📂</div>
                   <h3>No modules yet</h3>
-                  <p>Modules organize your lessons and quizzes</p>
                   <button className="btn-primary" style={{ marginTop: 16 }} onClick={() => setShowModuleForm(true)}>Add First Module</button>
                 </div>
               )}
             </>
           )}
 
-          {view === 'module' && selectedModule && (
+          {view === 'quizeditor' && selectedQuiz && (
             <>
               <div className="breadcrumb">
                 <span onClick={() => { setView('courses'); setSelectedCourse(null) }}>Courses</span>
                 <span className="sep">›</span>
-                <span onClick={() => { setView('course'); setSelectedModule(null) }}>{selectedCourse?.title}</span>
+                <span onClick={() => setView('course')}>{selectedCourse?.title}</span>
                 <span className="sep">›</span>
-                <span>{selectedModule.title}</span>
+                <span>{selectedQuiz.title}</span>
               </div>
-              <div className="page-header">
-                <h2>{selectedModule.title}</h2>
-                <p>{selectedModule.description}</p>
-              </div>
-
-              <div className="card" style={{ marginBottom: 24 }}>
-                <div className="card-header">
-                  <div>
-                    <div className="card-title">Lessons</div>
-                    <div className="card-subtitle">{lessons.length} lesson{lessons.length !== 1 ? 's' : ''}</div>
-                  </div>
-                  <button className="btn-accent" onClick={() => { setShowLessonForm(true); setEditingLesson(null); setLessonTitle(''); setLessonContent('') }}>+ Add Lesson</button>
+              <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <h2>{selectedQuiz.title}</h2>
+                  <p>{(moduleQuestions[selectedQuiz.id] || []).length} questions</p>
                 </div>
-                {showLessonForm && (
-                  <div className="form-panel">
-                    <h3>{editingLesson ? 'Edit Lesson' : 'New Lesson'}</h3>
-                    <form onSubmit={saveLesson}>
-                      <div className="form-group">
-                        <label>Lesson Title</label>
-                        <input type="text" value={lessonTitle} onChange={e => setLessonTitle(e.target.value)} placeholder="e.g. What is Psychology?" required />
-                      </div>
-                      <div className="form-group" style={{ marginTop: 12 }}>
-                        <label>Content</label>
-                        <textarea value={lessonContent} onChange={e => setLessonContent(e.target.value)} placeholder="Write your lesson content here..." style={{ minHeight: 200 }} required />
-                      </div>
-                      <div className="form-actions">
-                        <button type="submit" className="btn-primary" disabled={loading}>{editingLesson ? 'Save Changes' : 'Add Lesson'}</button>
-                        <button type="button" className="btn-secondary" onClick={() => { setShowLessonForm(false); setEditingLesson(null) }}>Cancel</button>
-                      </div>
-                    </form>
-                  </div>
-                )}
-                <div className="item-list">
-                  {lessons.map((lesson, i) => (
-                    <div key={lesson.id} className="item-row" style={{ cursor: 'default' }}>
-                      <div className="item-row-info">
-                        <h4>Lesson {i + 1}: {lesson.title}</h4>
-                        <p>{lesson.content?.substring(0, 80)}{lesson.content?.length > 80 ? '...' : ''}</p>
-                      </div>
-                      <div className="item-row-actions">
-                        <button className="btn-secondary btn-sm" onClick={() => startEditLesson(lesson)}>Edit</button>
-                        <button className="btn-danger" onClick={() => deleteLesson(lesson.id)}>Delete</button>
-                      </div>
-                    </div>
-                  ))}
-                  {lessons.length === 0 && !showLessonForm && <p style={{ color: 'var(--text-muted)', fontSize: 14, paddingTop: 8 }}>No lessons yet</p>}
-                </div>
+                <button className="btn-accent" onClick={() => setShowQForm(true)}>+ Add Question</button>
               </div>
 
-              <div className="card">
-                <div className="card-header">
-                  <div>
-                    <div className="card-title">Quiz</div>
-                    <div className="card-subtitle">{questions.length} question{questions.length !== 1 ? 's' : ''}</div>
-                  </div>
-                  {quiz && <button className="btn-accent" onClick={() => setShowQForm(true)}>+ Add Question</button>}
-                </div>
-                {!quiz && (
-                  <form onSubmit={createQuiz}>
+              {showQForm && (
+                <div className="form-panel">
+                  <h3>New Question</h3>
+                  <form onSubmit={addQuestion}>
                     <div className="form-group">
-                      <label>Quiz Title</label>
-                      <input type="text" value={quizTitle} onChange={e => setQuizTitle(e.target.value)} placeholder="e.g. Module 1 Quiz" required />
+                      <label>Question</label>
+                      <input type="text" value={qText} onChange={e => setQText(e.target.value)} placeholder="Enter your question" required />
                     </div>
-                    <div className="form-actions">
-                      <button type="submit" className="btn-primary" disabled={loading}>Create Quiz</button>
-                    </div>
-                  </form>
-                )}
-                {quiz && showQForm && (
-                  <div className="form-panel">
-                    <h3>New Question</h3>
-                    <form onSubmit={addQuestion}>
-                      <div className="form-group">
-                        <label>Question</label>
-                        <input type="text" value={qText} onChange={e => setQText(e.target.value)} placeholder="Enter your question" required />
-                      </div>
-                      {qOptions.map((opt, i) => (
-                        <div className="form-group" key={i} style={{ marginTop: 10 }}>
-                          <label>
-                            <input type="radio" name="correct" checked={qCorrect === i} onChange={() => setQCorrect(i)} style={{ marginRight: 8 }} />
-                            Option {i + 1} {qCorrect === i ? '✓ correct' : ''}
-                          </label>
-                          <input type="text" value={opt} onChange={e => { const u = [...qOptions]; u[i] = e.target.value; setQOptions(u) }} placeholder={`Option ${i + 1}`} required />
-                        </div>
-                      ))}
-                      <div className="form-group" style={{ marginTop: 12 }}>
-                        <label>Explanation (shown after answering)</label>
-                        <input type="text" value={qExplanation} onChange={e => setQExplanation(e.target.value)} placeholder="Why is that the correct answer?" />
-                      </div>
-                      <div className="form-actions">
-                        <button type="submit" className="btn-primary" disabled={loading}>Add Question</button>
-                        <button type="button" className="btn-secondary" onClick={() => setShowQForm(false)}>Cancel</button>
-                      </div>
-                    </form>
-                  </div>
-                )}
-                {quiz && (
-                  <div className="item-list">
-                    {questions.map((q, i) => (
-                      <div key={q.id} className="item-row" style={{ cursor: 'default', flexDirection: 'column', alignItems: 'flex-start', gap: 8 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                          <strong style={{ fontSize: 14 }}>Q{i + 1}: {q.question}</strong>
-                          <button className="btn-danger" onClick={() => deleteQuestion(q.id)}>Delete</button>
-                        </div>
-                        <div style={{ fontSize: 13, color: 'var(--text-muted)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                          {q.options?.map((opt, j) => (
-                            <span key={j} style={{ color: j === q.correct_index ? 'var(--success)' : 'inherit' }}>
-                              {j === q.correct_index ? '✓ ' : ''}{opt}
-                            </span>
-                          ))}
-                        </div>
+                    {qOptions.map((opt, i) => (
+                      <div className="form-group" key={i} style={{ marginTop: 10 }}>
+                        <label>
+                          <input type="radio" name="correct" checked={qCorrect === i} onChange={() => setQCorrect(i)} style={{ marginRight: 8 }} />
+                          Option {i + 1} {qCorrect === i ? '✓ correct' : ''}
+                        </label>
+                        <input type="text" value={opt} onChange={e => { const u = [...qOptions]; u[i] = e.target.value; setQOptions(u) }} placeholder={`Option ${i + 1}`} required />
                       </div>
                     ))}
-                    {questions.length === 0 && !showQForm && <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>No questions yet</p>}
+                    <div className="form-group" style={{ marginTop: 12 }}>
+                      <label>Explanation</label>
+                      <input type="text" value={qExplanation} onChange={e => setQExplanation(e.target.value)} placeholder="Why is that the correct answer?" />
+                    </div>
+                    <div className="form-actions">
+                      <button type="submit" className="btn-primary" disabled={loading}>Add Question</button>
+                      <button type="button" className="btn-secondary" onClick={() => setShowQForm(false)}>Cancel</button>
+                    </div>
+                  </form>
+                </div>
+              )}
+
+              <div className="item-list">
+                {(moduleQuestions[selectedQuiz.id] || []).map((q, i) => (
+                  <div key={q.id} className="item-row" style={{ cursor: 'default', flexDirection: 'column', alignItems: 'flex-start', gap: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                      <strong style={{ fontSize: 14 }}>Q{i + 1}: {q.question}</strong>
+                      <button className="btn-danger" onClick={() => deleteQuestion(q.id, selectedQuiz.id)}>Delete</button>
+                    </div>
+                    <div style={{ fontSize: 13, color: 'var(--text-muted)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                      {q.options?.map((opt, j) => (
+                        <span key={j} style={{ color: j === q.correct_index ? 'var(--success)' : 'inherit' }}>
+                          {j === q.correct_index ? '✓ ' : ''}{opt}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {(moduleQuestions[selectedQuiz.id] || []).length === 0 && !showQForm && (
+                  <div className="empty-state">
+                    <div className="icon">❓</div>
+                    <h3>No questions yet</h3>
+                    <button className="btn-primary" style={{ marginTop: 16 }} onClick={() => setShowQForm(true)}>Add First Question</button>
                   </div>
                 )}
               </div>
